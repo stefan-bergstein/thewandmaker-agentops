@@ -15,8 +15,7 @@ import threading
 import time
 import urllib.request
 import os
-# Always this project's cluster, also when called without make (the Makefile sets the same).
-os.environ["KUBECONFIG"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "local", "kubeconfig")
+# Honor the caller's current oc context, including an exported KUBECONFIG.
 
 WISHES = ["I need my first wand. Please choose one that suits me and reserve a fitting for me.",
           "I'd like a wand for charms, something supple. Could you reserve a fitting?",

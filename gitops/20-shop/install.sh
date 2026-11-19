@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 oc apply -f gitops/20-shop/00-build.yaml
+# Facts live in this namespace, so create it before publishing them.
+bash gitops/20-shop/facts.sh
 
 # Random tokens, created once and never written to git or printed.
 if ! oc get secret shop-tokens -n ollivanders >/dev/null 2>&1; then
@@ -119,17 +121,7 @@ oc create configmap shop-links -n ollivanders --dry-run=client -o yaml \
 # deck. It goes into the secret deck-login and nowhere else; the value is never printed. Without
 # the line in .env the secret is left alone and, if there is none, the deck has no password door.
 login_before=$(oc get secret deck-login -n ollivanders -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)
-python3 - <<'PY' | oc apply -f - >/dev/null
-import base64, json
-env = dict(l.rstrip("\n").split("=", 1) for l in open(".env") if "=" in l and not l.startswith("#"))
-pw = env.get("DECK_PASSWORD", "").strip().strip('"').strip("'")
-if pw:
-    print(json.dumps({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-                      "metadata": {"name": "deck-login", "namespace": "ollivanders"},
-                      "data": {"password": base64.b64encode(pw.encode()).decode()}}))
-else:
-    print(json.dumps({"apiVersion": "v1", "kind": "List", "items": []}))
-PY
+python3 scripts/deck-login.py
 login_after=$(oc get secret deck-login -n ollivanders -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true)
 if [ -n "$login_after" ]; then echo "deck password: set (secret deck-login)"; else echo "deck password: none (add DECK_PASSWORD to .env and run this again)"; fi
 oc apply -f gitops/20-shop/20-shop-front.yaml

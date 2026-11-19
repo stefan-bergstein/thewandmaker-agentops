@@ -55,23 +55,18 @@ costs money and takes three manual steps: see [docs/manual-steps.md](docs/manual
 `infra/context.example.json` to `infra/context.json` first and put the AWS account ID in;
 `scripts/tf.py` refuses to run against any other account.
 
-### 2. A bastion
+### 2. An OpenShell CLI on your machine
 
-This is the one that surprises people. The OpenShell CLI that creates the sandboxes runs on a
-Linux host next to the cluster, not on your laptop.
+ROSA, AWS and a bastion are optional. Authenticate with `oc login` using your cluster's identity
+provider. All deployment and rehearsal commands honor `KUBECONFIG`; without it, they use the
+standard `~/.kube/config`. Install the pinned CLI with `make openshell-cli`, add
+`$HOME/.local/bin` to `PATH`, then run `make preflight` and `make up-platform`.
+Linux and macOS need coreutils (`timeout` or `gtimeout`).
 
-- [ ] A Linux host you reach with `ssh -o BatchMode=yes` (key login, no prompt): `BASTION_HOST`,
-      `BASTION_USER` in `.env`.
-- [ ] `oc` and `curl` on it. `make bastion-cli` installs the OpenShell CLI there itself.
-- [ ] For `make up-access`: `rosa` on it, logged in. That target creates the cluster-admin with
-      `rosa create admin` and a machine pool with `rosa create machinepool`. Red Hat's demo
-      platform hands out such a bastion with every ROSA lab, which is why the build leans on it.
-
-Not on ROSA, or no `rosa` on the bastion? Skip `up-access` and do its three jobs by hand: log in
-with `KUBECONFIG=local/kubeconfig oc login …` as a cluster-admin, log `oc` in on the bastion as
-well, and make sure the workers are big enough. Then run the rest of `up-platform` target by
-target. `make cluster-login` expects a user called `cluster-admin` and its password in
-`local/cluster-admin-password`. We haven't tried this path.
+For optional remote execution, set both `BASTION_HOST` and `BASTION_USER` in `.env`. The remote
+host needs authenticated `oc`, Bash, OpenSSL, coreutils and OpenShell (`make bastion-cli`).
+Without these settings sandbox scripts run locally. `up-access` remains a separate ROSA-only
+helper; the platform build never creates cluster users or machine pools.
 
 ### 3. Models
 
@@ -103,14 +98,15 @@ tokens or more, and the night run sends 40 visits.
 | `oc` | everything | 4.21.17 |
 | `helm` | `make up-openshell` | 4.2 |
 | `python3` | all scripts, standard library only | 3.11 |
-| `bash`, `make`, `ssh`, `scp`, `openssl` | the build | macOS defaults |
+| `bash`, `make`, `openssl`, `curl`, coreutils | the build (`timeout` / `gtimeout`) | Linux or macOS |
+| `ssh`, `scp` | optional bastion only | any |
 | `git` | `make vendor` | any |
 | `terraform`, `aws`, `rosa` | only `make up` | Terraform 1.16, AWS CLI 2 |
 | `node`, Chrome, `puppeteer-core` | only `make captures` | Node 26 |
 | `ffmpeg`, Pillow | only `make film` | ffmpeg 8 |
 
-The scripts were written on macOS. `scripts/shell-ui.py` and `scripts/capture-ui.mjs` assume a Mac
-(Terminal, Chrome's path); everything else is plain bash and Python.
+The capture tool assumes Chrome on macOS; deployment scripts run on Linux or macOS.
+`make shell-ui` runs in the current interactive terminal.
 
 ### 5. In `.env`
 
@@ -128,10 +124,10 @@ what demo 2 shows. Everything else is safe to run again.
 
 | # | Target | What it does | Took us | Check |
 |---|---|---|---|---|
-| 1 | `up-access` | ROSA only: cluster-admin, `local/kubeconfig`, `oc` on the bastion, machine pool `olli` (3 × m6a.2xlarge) | 3 min 44 s | `make preflight` |
+| optional | `up-access` (separate from `up-platform`) | ROSA only: cluster-admin, `local/kubeconfig`, `oc` on the bastion, machine pool `olli` (3 × m6a.2xlarge) | 3 min 44 s | `make preflight` |
 | 2 | `up-agent-sandbox` | Agent Sandbox operator | with 6: about 1 min | CRD `sandboxes.agents.x-k8s.io` |
 | 3 | `up-openshell` | OpenShell gateway, narrow SCC, passthrough route | with 4, 5: 2 min 20 s | `oc get pods -n openshell` |
-| 4 | `bastion-cli` | OpenShell CLI on the bastion, mTLS to the gateway | | `openshell status` on the bastion |
+| 4 | `cli-connect` | Connect the installed local CLI (or optional bastion CLI), mTLS to the gateway | | `openshell status` |
 | 5 | `up-openclaw-image` | builds the sandbox image in `olli-build` | | `oc get istag -n olli-build` |
 | 6 | `up-operators` | OpenShift AI, cert-manager, LeaderWorkerSet, MCP gateway | | CSVs `Succeeded` |
 | 7 | `up-openshift-ai` | the DataScienceCluster | 2 min 3 s | `oc get datasciencecluster` is `Ready` |
@@ -144,8 +140,8 @@ what demo 2 shows. Everything else is safe to run again.
 | 14 | `up-pool` | **recreates** `apprentice-2` and `apprentice-3` for the audience's phones | | |
 | 15 | `up-deck` | the deck as a pod behind an HTTPS route | not timed | prints the deck's URL |
 
-`KUBECONFIG` is set by the Makefile to `local/kubeconfig`. For your own `oc` calls, export it
-yourself; your default kubeconfig may point somewhere else.
+The Makefile and helpers use the current `oc` context. To use an old project kubeconfig,
+explicitly export `KUBECONFIG="$PWD/local/kubeconfig"` before running commands.
 
 After the build, once:
 
@@ -181,7 +177,8 @@ what the cluster does on every slide.
 
 The long version of each is in [docs/build-journal.md](docs/build-journal.md).
 
-1. **Login tokens last 24 hours.** "Unauthorized" the next morning means `make cluster-login`.
+1. **Cluster authentication expires.** Renew it with `oc login` or `make cluster-login`.
+   The optional saved ROSA admin flow is `make rosa-cluster-login`.
 2. **Don't grant `privileged`.** The upstream guide does; we use the SCC
    `openshell-sandbox-minimum-required` in `gitops/02-openshell/00-namespace-scc.yaml`. If sandbox
    pods are rejected on your version, `OPENSHELL_SCC=privileged make up-openshell` is the fallback.

@@ -6,7 +6,8 @@
   make dashboard-stop                  # close the forward and the tunnel
 
 The Control UI is served by the OpenClaw gateway inside the sandbox, on loopback port 18789.
-Nothing on the cluster exposes it: no service, no route. The way in has two legs:
+Nothing on the cluster exposes it: no service, no route. Locally the OpenShell CLI
+forwards it directly. With an optional bastion the way in has two legs:
 
   browser ─ssh tunnel─> bastion 127.0.0.1:18789 ─openshell forward (mTLS)─> sandbox 127.0.0.1:18789
 
@@ -45,9 +46,10 @@ def load_env():
     return env
 
 
-def on_bastion(target, script):
-    """Run a bash snippet on the bastion. Output is returned, never echoed: it may hold the link."""
-    return subprocess.run(["ssh", "-o", "BatchMode=yes", target, "bash -s"], text=True, capture_output=True,
+def run_cli(target, script):
+    """Run locally or over SSH. Capture output because it may contain a pairing link."""
+    command = ["ssh", "-o", "BatchMode=yes", target, "bash -s"] if target else ["bash", "-s"]
+    return subprocess.run(command, text=True, capture_output=True,
                           input="export PATH=$HOME/.local/bin:$PATH NO_COLOR=1\n" + script + "\n")
 
 
@@ -62,15 +64,20 @@ def listening():
 
 
 def stop(target):
-    on_bastion(target, stop_forwards())
-    subprocess.run(["pkill", "-f", f"ssh -N -f .*-L {PORT}:127.0.0.1:{PORT}"], check=False)
-    print("Console closed: forward on the bastion stopped, tunnel gone.")
+    run_cli(target, stop_forwards())
+    if target:
+        subprocess.run(["pkill", "-f", f"ssh -N -f .*-L {PORT}:127.0.0.1:{PORT}"], check=False)
+    print("Console closed: OpenShell forward stopped.")
 
 
 def main():
     args = sys.argv[1:]
     env = load_env()
-    target = f"{env['BASTION_USER']}@{env['BASTION_HOST']}"
+    if bool(env.get("BASTION_HOST")) != bool(env.get("BASTION_USER")):
+        sys.exit("Set both BASTION_HOST and BASTION_USER, or neither.")
+    target = f"{env['BASTION_USER']}@{env['BASTION_HOST']}" if env.get("BASTION_HOST") else None
+    if target and target.startswith("-"):
+        sys.exit("Invalid bastion SSH target")
     if args == ["--stop"]:
         return stop(target)
     # --capture [options for scripts/capture-ui.mjs]: take a picture of the console for the deck
@@ -83,11 +90,11 @@ def main():
         sys.exit(f"Unknown sandbox {name!r}. One of: {', '.join(POOL)}")
     q = shlex.quote(name)
 
-    # 1. On the bastion: one forward, for this apprentice only. Make sure its gateway runs, then
+    # 1. On the CLI host: one forward, for this apprentice only. Make sure its gateway runs, then
     #    ask OpenClaw for a pairing link. Everything but the JSON goes to stderr. The forward keeps
     #    running after this ssh session; it must not hold the session's output open, or ssh never
     #    returns (it did exactly that on the first real run), so its output goes nowhere.
-    r = on_bastion(target, stop_forwards() + f"""
+    r = run_cli(target, stop_forwards() + f"""
 openshell forward start {PORT} {q} -d </dev/null >/dev/null 2>&1 || exit 11
 openshell sandbox exec -n {q} --no-tty -- sh /sandbox/.openclaw/start-gateway.sh </dev/null >&2 || exit 12
 openshell sandbox exec -n {q} --no-tty -- openclaw dashboard --json </dev/null
@@ -113,7 +120,7 @@ openshell sandbox exec -n {q} --no-tty -- openclaw dashboard --json </dev/null
                  "Check gateway.bind and gateway.port in gitops/04-openclaw/openclaw.json.")
 
     # 2. On this laptop: the ssh tunnel to the bastion, unless one is up already.
-    if not listening():
+    if target and not listening():
         subprocess.run(TUNNEL + [target], check=True)
 
     # 3. Wait until the Control UI answers through both legs, then open the one-time link.
@@ -132,7 +139,7 @@ openshell sandbox exec -n {q} --no-tty -- openclaw dashboard --json </dev/null
         # capture. The one-time link goes to the capture tool through the environment, never as an
         # argument, and pairs a throwaway headless browser instead of yours.
         r = subprocess.run(["node", os.path.join(ROOT, "scripts", "capture-ui.mjs"), "console", "-", *capture],
-                           env=dict(os.environ, CAPTURE_URL=url, KUBECONFIG=os.path.join(ROOT, "local", "kubeconfig")))
+                           env=dict(os.environ, CAPTURE_URL=url))
         sys.exit(r.returncode)
     webbrowser.open(url)
     print(f"The console of {name} is open in your browser: http://127.0.0.1:{PORT}/\n"

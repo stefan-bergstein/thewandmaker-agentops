@@ -11,7 +11,7 @@
    The bastion file is the source of truth: the bastion belongs to this cluster, a local file may
    be left over from an earlier one.
 3. Waits until the login works (a new admin needs a few minutes), refreshes local/kubeconfig with
-   scripts/cluster-login.py and logs oc in on the bastion as well.
+   scripts/rosa-cluster-login.py and logs oc in on the bastion as well.
 4. Creates the machine pool "olli" (3 x m6a.2xlarge, label olli.dev/pool=work) if it is missing
    and waits until its three nodes are Ready.
 """

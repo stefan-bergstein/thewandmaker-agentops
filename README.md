@@ -78,9 +78,9 @@ Open http://127.0.0.1:8765, press F for fullscreen and N for the speaker notes.
 
 ## Build the live version
 
-For the real thing you need more than a laptop: an OpenShift 4.22 cluster with cluster-admin, a
-bastion host, and at least one model endpoint with a key. Is that all? Not quite. The full list is
-long enough that we wrote it down for your coding agent.
+For the live demo, bring an existing OpenShift 4.22 cluster with cluster-admin access and an
+OpenAI-compatible model endpoint. ROSA, AWS and a bastion are optional. The OpenShell CLI runs
+on your own machine (Linux or macOS).
 
 Point your agent at [AGENTS.md](AGENTS.md). It opens with the prerequisites as a checklist, and
 `make preflight` checks them without changing anything:
@@ -89,9 +89,28 @@ Point your agent at [AGENTS.md](AGENTS.md). It opens with the prerequisites as a
 cp .env.example .env
 ```
 
+Fill in the model settings in `.env`, then authenticate to your cluster:
+
 ```bash
+oc login <your-api-url>       # use your cluster's interactive login
+# export KUBECONFIG=/path/to/config  # optional; otherwise oc uses ~/.kube/config
+make openshell-cli          # install pinned OpenShell 0.0.116
+export PATH="$HOME/.local/bin:$PATH"
 make preflight
+make up-platform
 ```
+
+Install `oc`, `helm`, Python 3.9+, Bash, Make, OpenSSL, Git, curl and coreutils (`timeout`, or
+`gtimeout` on macOS). The cluster needs a default storage class, a managed internal image
+registry, sufficient worker capacity, outbound image/model access, and the operator channels
+listed in [AGENTS.md](AGENTS.md). The installer does not create users or resize your cluster.
+`make up-platform` recreates the apprentice sandboxes, clearing their audit logs.
+
+All deployment and rehearsal commands use your current `oc` context. Existing ROSA users who
+keep credentials in the old location must explicitly export `KUBECONFIG="$PWD/local/kubeconfig"`.
+Optional ROSA provisioning remains available with `make up` and `make up-access`; the old saved
+admin login is `make rosa-cluster-login`. Set both bastion variables only for remote CLI execution.
+See [docs/existing-cluster.md](docs/existing-cluster.md) for setup and verification.
 
 Once the preflight is clean, `make up-platform` installs everything in about ten minutes. The
 deck then runs on the cluster too, behind a password you set in `.env`, and its first slide has
@@ -105,7 +124,7 @@ the buttons to prepare and reset a run.
 | `gitops/` | The platform, one folder per piece, numbered in install order |
 | `apps/shop/` | The shop: tools, chat, desk, model gateway, the presenter's backstage page |
 | `deck/` | The slides, the intro film and the demos in one page |
-| `scripts/` | Preflight, cluster login, the bastion runner, the night run, the red-team campaign |
+| `scripts/` | Preflight, cluster login, the local/optional remote CLI runner, the night run, the red-team campaign |
 | `infra/` | Terraform for a ROSA cluster, if you don't have one |
 | `film/` | How the intro film was cut |
 | [REHEARSAL.md](REHEARSAL.md) | A test run of the talk, and back to zero |

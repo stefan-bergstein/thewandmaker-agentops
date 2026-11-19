@@ -18,8 +18,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-KUBECONFIG = os.path.join(ROOT, "local", "kubeconfig")
-OCENV = dict(os.environ, KUBECONFIG=KUBECONFIG)
+OCENV = dict(os.environ)
 
 missing, warnings = [], []
 
@@ -76,27 +75,35 @@ TOOLS = [
     ("python3", True, "all scripts (standard library only)"),
     ("bash", True, "the install scripts in gitops/"),
     ("make", True, "the build order"),
-    ("ssh", True, "everything that runs on the bastion"),
-    ("scp", True, "copies scripts to the bastion"),
+    ("ssh", False, "everything that runs on the bastion"),
+    ("scp", False, "copies scripts to the bastion"),
     ("openssl", True, "make up-shop creates the shop's tokens"),
     ("git", False, "make vendor (only for a local OpenShell CLI)"),
-    ("openshell", False, "optional on this machine; the build uses the one on the bastion"),
+    ("openshell", True, "make openshell-cli; or configure an optional bastion"),
+    ("curl", True, "OpenShell CLI installation"),
     ("terraform", False, "only make up (your own ROSA cluster)"),
-    ("aws", False, "only make up and make status"),
-    ("rosa", False, "only make login / link-account / up; the bastion needs its own"),
+    ("aws", False, "only make up"),
+    ("rosa", False, "only optional ROSA provisioning"),
     ("node", False, "only make captures (with puppeteer-core and Chrome)"),
     ("ffmpeg", False, "only make film"),
     ("zip", False, "only make deck-zip"),
 ]
 
 
-def check_tools():
+def check_tools(env):
     head("This machine")
     for name, required, why in TOOLS:
+        if name in ("ssh", "scp"):
+            required = bool(env.get("BASTION_HOST"))
+        elif name == "openshell" and env.get("BASTION_HOST"):
+            required = False
         if shutil.which(name):
             line("ok", name)
         else:
             line("MISSING" if required else "warn", name, why)
+    if not env.get("BASTION_HOST"):
+        line("ok" if shutil.which("timeout") or shutil.which("gtimeout") else "MISSING",
+             "timeout or gtimeout", "install coreutils for sandbox creation time limits")
     if sys.version_info < (3, 9):
         line("MISSING", "python3 3.9 or newer", f"this is {sys.version.split()[0]}")
     code, out, _ = run(["oc", "version", "--client", "-o", "json"])
@@ -111,9 +118,6 @@ def check_tools():
 
 # ---- .env -----------------------------------------------------------------------------------
 REQUIRED = [
-    ("ROSA_API_URL", "API URL of the cluster"),
-    ("BASTION_HOST", "host with rosa, oc and (after make bastion-cli) openshell"),
-    ("BASTION_USER", "ssh user on that host"),
     ("model", "main model's name"),
     ("modelendpoint", "main model's OpenAI-compatible endpoint"),
     ("modelkey", "main model's API key"),
@@ -125,7 +129,6 @@ OPTIONAL = [
     ("REDHATTMM_API_KEY", "second backup's key"),
     ("DECK_PASSWORD", "password door of the hosted live deck"),
 ]
-OWN_CLUSTER = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "RHCS_CLIENT_ID", "RHCS_CLIENT_SECRET"]
 
 
 def check_env():
@@ -145,13 +148,8 @@ def check_env():
         line("warn", "ROSA_API_URL", "should look like https://api.<cluster>.<domain>:443")
     if env.get("modelendpoint") and not re.match(r"^https?://", env["modelendpoint"]):
         line("warn", "modelendpoint", "should be a full URL ending in /v1 or /v1/chat/completions")
-    have = [k for k in OWN_CLUSTER if env.get(k)]
-    if len(have) == len(OWN_CLUSTER):
-        line("ok", "AWS_* and RHCS_* (only make up needs them)")
-    else:
-        line("warn", "AWS_* / RHCS_*", "not complete: fine when the cluster already exists, make up needs all five")
-    if not os.path.isfile(os.path.join(ROOT, "infra", "context.json")):
-        line("warn", "infra/context.json", "only make up: copy infra/context.example.json and set your AWS account ID")
+    if bool(env.get("BASTION_HOST")) != bool(env.get("BASTION_USER")):
+        line("MISSING", "bastion configuration", "set both BASTION_HOST and BASTION_USER, or neither")
     return env
 
 
@@ -189,18 +187,14 @@ def check_cluster(env):
     if not shutil.which("oc"):
         line("skip", "cluster checks", "no oc")
         return
-    if not os.path.isfile(KUBECONFIG):
-        line("MISSING", "local/kubeconfig", "make up-access on a ROSA cluster with a bastion; "
-             "elsewhere: KUBECONFIG=local/kubeconfig oc login <api> as a cluster-admin")
-        return
     code, who, err = oc("whoami")
     if code:
-        line("MISSING", "login to the cluster", "make cluster-login (tokens last 24 hours); oc said: " + err[:120])
+        line("MISSING", "login to the cluster", "run oc login with your cluster credentials; authentication check failed")
         return
     line("ok", f"logged in as {who}")
     code, server, _ = oc("whoami", "--show-server")
     if env.get("ROSA_API_URL") and server and server.rstrip("/").split(":")[1] != env["ROSA_API_URL"].rstrip("/").split(":")[1]:
-        line("warn", "local/kubeconfig points at another cluster than ROSA_API_URL in .env")
+        line("warn", "current oc context points at another cluster than optional ROSA_API_URL")
     code, out, _ = oc("auth", "can-i", "*", "*", "--all-namespaces")
     line("ok" if out == "yes" else "MISSING", "cluster-admin rights", "SCCs, operators and cluster roles need them")
 
@@ -216,8 +210,7 @@ def check_cluster(env):
     if infra:
         st = infra.get("status", {})
         topo = st.get("controlPlaneTopology", "?")
-        line("ok", f"platform {st.get('platform', '?')}, control plane {topo}"
-             + (" (hosted, as ours: ROSA HCP)" if topo == "External" else " (ours was ROSA HCP; make up-access is ROSA only)"))
+        line("ok", f"platform {st.get('platform', '?')}, control plane {topo}")
 
     nodes = oc_json("get", "nodes")
     if nodes:
@@ -232,8 +225,7 @@ def check_cluster(env):
         if cpu >= 24 and mem >= 90:
             line("ok", text)
         else:
-            line("warn", text, "we ran on 32 vCPU / 128 GiB (2 x m6a.xlarge + 3 x m6a.2xlarge); "
-                 "make up-access adds the three big ones on ROSA")
+            line("warn", text, "provision roughly 32 vCPU / 128 GiB of worker capacity")
     sc = oc_json("get", "storageclass")
     if sc is not None:
         default = [s["metadata"]["name"] for s in sc["items"]
@@ -292,9 +284,8 @@ def check_bastion(env):
         return
     target = f"{env['BASTION_USER']}@{env['BASTION_HOST']}"
     probe = ("export PATH=$HOME/.local/bin:$PATH\n"
-             "for c in oc rosa openshell curl; do command -v $c >/dev/null && echo have:$c || echo no:$c; done\n"
-             "oc whoami >/dev/null 2>&1 && echo have:oc-login || echo no:oc-login\n"
-             "rosa whoami >/dev/null 2>&1 && echo have:rosa-login || echo no:rosa-login\n")
+             "for c in oc openshell curl openssl timeout; do command -v $c >/dev/null && echo have:$c || echo no:$c; done\n"
+             "oc whoami >/dev/null 2>&1 && echo have:oc-login || echo no:oc-login\n")
     code, out, err = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, "bash -s"],
                          stdin=probe, timeout=60)
     if code and "have:" not in out:
@@ -305,11 +296,9 @@ def check_bastion(env):
     got = set(out.split())
     line("ok" if "have:oc" in got else "MISSING", "bastion: oc", "the sandbox scripts call oc there")
     line("ok" if "have:curl" in got else "MISSING", "bastion: curl", "installs the OpenShell CLI")
-    line("ok" if "have:rosa" in got else "warn", "bastion: rosa",
-         "make up-access needs it (cluster-admin, machine pool); without ROSA, skip that target")
-    if "have:rosa" in got:
-        line("ok" if "have:rosa-login" in got else "warn", "bastion: rosa is logged in", "rosa login on the bastion")
-    line("ok" if "have:oc-login" in got else "warn", "bastion: oc is logged in", "make up-access does it; or oc login there yourself")
+    for tool in ("openssl", "timeout"):
+        line("ok" if f"have:{tool}" in got else "MISSING", f"bastion: {tool}", "sandbox scripts need it")
+    line("ok" if "have:oc-login" in got else "warn", "bastion: oc is logged in", "run oc login on the remote host")
     if "have:openshell" in got:
         line("ok", "bastion: openshell CLI")
     else:
@@ -319,8 +308,8 @@ def check_bastion(env):
 def main():
     local_only = "--local" in sys.argv
     print("Preflight for the digital apprentice's platform. Nothing is changed.")
-    check_tools()
     env = check_env()
+    check_tools(env)
     if local_only:
         print("\n(--local: cluster and bastion not checked)")
     else:

@@ -9,7 +9,7 @@
 `make prepare`, `make prepare QUICK=1`, `make prepare CAMPAIGN=1`, `make prepare CHECK=1` do the same.
 
 What it does, in this order:
-  1  cluster login        a fresh 24-hour token (the stored cluster-admin password, never printed)
+  1  cluster login        verify the current oc context (log in yourself if expired)
   2  the platform         every deployment of the shop ready, three digital apprentices running
   3  the oracles          MaaS and OpenRouter asked directly with the keys from .env (never printed),
                           and what the model gateway says about itself
@@ -39,7 +39,6 @@ import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["KUBECONFIG"] = os.path.join(ROOT, "local", "kubeconfig")
 ARGS = set(sys.argv[1:])
 QUICK, CAMPAIGN, CHECK = "--quick" in ARGS, "--campaign" in ARGS, "--check" in ARGS
 if ARGS - {"--quick", "--campaign", "--check"}:
@@ -144,17 +143,12 @@ def ask_model(url, key, model, extra=None):
 # ---------------------------------------------------------------- 1 login
 def login():
     head(1, "cluster login")
-    if not CHECK:
-        rc, out = run(["python3", "scripts/cluster-login.py"])
-        if rc != 0:
-            say("fail", "login", "make cluster-login failed: " + re.sub(r"sha256~\S+", "<token>", out.strip().splitlines()[-1] if out.strip() else "no output")[:120])
-            return False
     try:
         who = oc("whoami")
     except RuntimeError:
         say("fail", "login", "not logged in to the cluster. Run: make cluster-login")
         return False
-    say("ok", "login", f"logged in as {who}" + ("" if CHECK else ", token fresh for 24 hours"))
+    say("ok", "login", f"logged in as {who}")
     return True
 
 
@@ -168,7 +162,7 @@ def platform(shop):
     try:
         live = shop.call("/api/platform", timeout=60).get("live", {})
         n = live.get("sandboxes")
-        say("ok" if n == 3 else "fail", "platform", f"{n} of 3 digital apprentices running" + ("" if n == 3 else " (bastion: openshell sandbox list)"))
+        say("ok" if n == 3 else "fail", "platform", f"{n} of 3 digital apprentices running" + ("" if n == 3 else " (run openshell sandbox list)"))
     except Exception as e:
         say("fail", "platform", f"the shop does not answer: {e}"[:140])
 
@@ -284,7 +278,7 @@ def tune():
     if CHECK:
         say("check", "gateways", "not restarted in --check; do it before the talk: make up-tune")
         return
-    rc, out = run(["python3", "scripts/on-bastion.py", "gitops/04-openclaw/tune.sh"])
+    rc, out = run(["python3", "scripts/run-openshell.py", "gitops/04-openclaw/tune.sh"])
     up = len(re.findall(r"gateway up after", out))
     say("ok" if up == 3 else "fail", "gateways", f"{up} of 3 gateways restarted; sessions and audit logs kept"
         + ("" if up == 3 else ". Run: make up-tune, and read its output"))

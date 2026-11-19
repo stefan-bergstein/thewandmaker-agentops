@@ -16,8 +16,7 @@ import json
 import os
 import subprocess
 import sys
-# Always this project's cluster, also when called without make (the Makefile sets the same).
-os.environ["KUBECONFIG"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "local", "kubeconfig")
+# Honor the caller's current oc context, including an exported KUBECONFIG.
 
 MARK = os.path.join(os.path.dirname(__file__), "..", "local", "oracle-mark.json")
 GW = "http://model-gateway.ollivanders.svc:8080/oracle"

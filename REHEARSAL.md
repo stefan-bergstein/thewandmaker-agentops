@@ -49,7 +49,7 @@ The tables below are the same steps by hand, for when you want to do only one of
 
 | Step | Command | Why |
 |---|---|---|
-| 1 | `make cluster-login` | Only if the last login is older than 24 hours. The last one was on 16 November at 09:25. |
+| 1 | `make cluster-login` | Only if authentication has expired; uses your current kubeconfig and interactive cluster login. |
 | 2 | `make deck-live` | Writes the live addresses, the desk key and the console's address into the deck. |
 | 3 | `python3 scripts/shop-say.py --reset` | "New day": empties requests and fittings, and every customer starts a fresh conversation. |
 | 4 | `python3 scripts/rush-sim.py --reset` | Rush counters and the oracles' call counters back to zero. |

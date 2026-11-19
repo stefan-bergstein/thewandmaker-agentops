@@ -7,6 +7,7 @@ restarts the OpenClaw gateways, plays a trial run and empties everything. "Reset
 One run at a time. Its steps are kept in memory, and the page polls them.
 """
 import asyncio
+import os
 import re
 import time
 
@@ -14,6 +15,7 @@ import httpx
 
 from . import campaign, facts, rush, scroll
 from .tricks import TRICKS
+from .model_probe import check_inference
 
 NAME = re.compile(r"voldemort|tommarvoloriddle|tomriddle", re.I)   # never shown, only looked for
 state = {"running": "", "started": 0, "finished": 0, "now": "", "steps": []}
@@ -47,20 +49,19 @@ async def oracles():
     gw = deps["model_gw"]
     t = time.time()
     try:
-        async with httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(gw + "/raw/v1/chat/completions", json={
-                "model": "oracle", "max_tokens": 200,
-                "messages": [{"role": "user", "content": "Answer with the single word: ready"}]})
-            text = ((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-            o = (await c.get(gw + "/oracle")).json()
+        ok, reason = await check_inference(deps["run"], os.environ.get("APPRENTICE_SANDBOX", "apprentice"))
+        async with httpx.AsyncClient(timeout=20) as c:
+            response = await c.get(gw + "/oracle")
+            response.raise_for_status()
+            o = response.json()
     except Exception as e:
         say("fail", "oracles", f"the model gateway does not answer: {type(e).__name__} {e}"[:140])
         return
     who = {"maas": "Red Hat MaaS", "backup": "OpenRouter", "spare": "Red Hat endpoint (GLM)"}
     last = (o.get("last") or {}).get("oracle", "")
-    say("ok" if text.strip() else "fail", "oracles",
+    say("ok" if ok else "fail", "oracles",
         (f"an oracle answers in {time.time() - t:.1f} s" + (f" ({who.get(last, last)})" if last else ""))
-        if text.strip() else "no oracle answers: the digital apprentice will be lost for words. Fix a key in .env, then: make up-shop")
+        if ok else "model check failed: " + reason + ". Check the inference route and model configuration.")
     say("ok" if o.get("mode") == "backup-first" else "check", "oracles", f"model gateway: mode {o.get('mode')}"
         + ("" if o.get("mode") == "backup-first" else " (expected backup-first)")
         + f", OpenRouter has cost {(o.get('backup') or {}).get('spent_total', 0):.2f} USD so far")

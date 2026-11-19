@@ -6,7 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-python3 - <<'PY' > /tmp/platform-facts.$$.json
+FACTS=$(mktemp)
+trap 'rm -f "$FACTS"' EXIT
+python3 - <<'PY' > "$FACTS"
 import json, subprocess
 
 def oc(*a):
@@ -29,10 +31,9 @@ openshell = tag(oc("get", "statefulset", "openshell", "-n", "openshell", "-o",
                    "jsonpath={.spec.template.spec.containers[0].image}")).lstrip("v").split("-")[0]
 openclaw = next((l.split(":", 1)[1] for l in oc("get", "istag", "-n", "olli-build", "-o", "name").splitlines()
                  if "openclaw-sandbox:" in l), "")
-region = oc("get", "infrastructure", "cluster", "-o", "jsonpath={.status.platformStatus.aws.region}")
 facts = {
     "openshift": oc("get", "clusterversion", "version", "-o", "jsonpath={.status.desired.version}"),
-    "platform": "ROSA" + (", " + region if region else ""),
+    "platform": oc("get", "infrastructure", "cluster", "-o", "jsonpath={.status.platformStatus.type}") or "OpenShift",
     "openshiftAi": csv("redhat-ods-operator", "rhods-operator"),
     "agentSandbox": csv("openshift-operators", "agent-sandbox-operator"),
     "mcpGateway": csv("openshift-operators", "mcp-gateway"),
@@ -43,14 +44,13 @@ facts = {
 }
 print(json.dumps({k: v for k, v in facts.items() if v}))
 PY
-trap 'rm -f /tmp/platform-facts.$$.json' EXIT
 
 before=$(oc get configmap platform-facts -n ollivanders -o jsonpath='{.data.facts\.json}' 2>/dev/null || true)
-oc create configmap platform-facts -n ollivanders --from-file=facts.json=/tmp/platform-facts.$$.json \
+oc create configmap platform-facts -n ollivanders --from-file=facts.json="$FACTS" \
   --dry-run=client -o yaml | oc apply -f - >/dev/null
-echo "platform facts: $(cat /tmp/platform-facts.$$.json)"
+echo "platform facts updated from the cluster"
 # The pod reads them at start. Restart it only if they changed and it is already there.
-if [[ "$before" != "$(cat /tmp/platform-facts.$$.json)" ]] && oc get deploy/shop-front -n ollivanders >/dev/null 2>&1; then
+if [[ "$before" != "$(cat "$FACTS")" ]] && oc get deploy/shop-front -n ollivanders >/dev/null 2>&1; then
   oc rollout restart deploy/shop-front -n ollivanders >/dev/null
   oc rollout status deploy/shop-front -n ollivanders --timeout=300s
 fi

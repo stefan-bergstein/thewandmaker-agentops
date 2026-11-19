@@ -2,11 +2,11 @@
 """Every address of the demo on one page, read from the cluster.
 
   scripts/links.py                 # the links; the desk key and the password are left out
-  scripts/links.py --secrets       # with the desk key in the links and the cluster-admin password
+  scripts/links.py --secrets       # with the desk key in the links
   scripts/links.py --secrets --out local/links.md    # into a file instead of the terminal
 
 `make links` and `make links SECRETS=1` do the same. The output is Markdown, so you can paste it
-into a note or a message. With --secrets it holds the cluster-admin password, and with that
+into a note or a message. With --secrets it holds the desk key, and with that
 everything on the cluster: share it the way you would share a password, not in an open channel.
 local/ is not in git and not in the deck's zip.
 """
@@ -16,7 +16,6 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.environ["KUBECONFIG"] = os.path.join(ROOT, "local", "kubeconfig")
 
 
 def oc(*a):
@@ -53,7 +52,7 @@ def main():
     ns = console + "/k8s/ns/ollivanders"
     rows = [
         ("The cluster", [
-            ("OpenShift console", console, "log in as cluster-admin"),
+            ("OpenShift console", console, "use your cluster login"),
             ("Topology of the shop", console + "/topology/ns/ollivanders?view=graph", "the link on the first architecture slide"),
             ("The apprentices' pods", console + "/k8s/ns/openshell/pods", "openshell-0 and one pod per sandbox"),
             ("Rails 1.5.1, config map", ns + "/configmaps/rails-1-5-1", "the link on slides 17 and 20"),
@@ -92,12 +91,10 @@ def main():
         lines += [f"| {a} | {b} | {c} |" for a, b, c in items]
         lines.append("")
     lines += ["## Logins", ""]
-    lines.append("- OpenShift console, OpenShift AI, MLflow: user `cluster-admin`, password "
-                 + ("`" + open(os.path.join(ROOT, "local", "cluster-admin-password")).read().strip() + "`" if secrets
-                    else "in `local/cluster-admin-password` (or run this with `--secrets`)"))
+    lines.append("- OpenShift console, OpenShift AI, MLflow: use your cluster identity provider login")
     if e.get("BASTION_HOST"):
         lines.append(f"- Bastion (the `openshell` CLI lives there): `ssh {e.get('BASTION_USER', 'rosa')}@{e['BASTION_HOST']}`, with your ssh key")
-    lines.append("- The cluster login on this laptop lasts 24 hours: `make cluster-login` renews it")
+    lines.append("- Renew expired cluster authentication with `oc login` or `make cluster-login`")
     if not secrets:
         lines.append("- The desk key: `make links SECRETS=1` puts it into the links above")
     text = "\n".join(lines) + "\n"

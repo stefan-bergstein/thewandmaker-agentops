@@ -2,7 +2,7 @@
 """Switch the deck to live mode for the current cluster.
 
 Writes deck/js/config.local.js with the shop's address and the desk key, read from the cluster
-(KUBECONFIG=local/kubeconfig). The file is in .gitignore and must not go into the shared zip.
+(the current oc context). The file is in .gitignore and must not go into the shared zip.
 Delete it (make deck-mock) and the deck is the scripted version again.
 
   scripts/deck-live.py --hosted FILE   the config for the deck served from the cluster
@@ -46,7 +46,7 @@ HOSTED = """// Written by scripts/deck-live.py --hosted for the deck served from
 
 
 def oc(*args):
-    env = dict(os.environ, KUBECONFIG=os.path.join(ROOT, "local", "kubeconfig"))
+    env = dict(os.environ)
     return oc_out(args, env=env)
 
 

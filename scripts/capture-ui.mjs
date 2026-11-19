@@ -13,7 +13,7 @@
 // deck/assets/img/captures/<name>.png, and deck/js/captures.js records when it was taken, so
 // the slide can say "captured from this cluster · <date>". Nothing is drawn or retouched.
 //
-// Login: the page is loaded with the bearer token of the current oc login (local/kubeconfig).
+// Login: the page is loaded with the bearer token of the current oc context.
 // The token is read at run time, sent only to hosts under the cluster's own apps domain, and
 // never printed or stored. OpenShift AI and MLflow accept that. The OpenShift console does not:
 // it wants its own login. For such a page pass --login: a Chrome window opens, you log in there
@@ -72,7 +72,7 @@ function findChrome() {
 }
 
 function oc(...a) {
-  return execFileSync("oc", a, { env: { ...process.env, KUBECONFIG: path.join(ROOT, "local", "kubeconfig") }, encoding: "utf8" }).trim();
+  return execFileSync("oc", a, { env: { ...process.env }, encoding: "utf8" }).trim();
 }
 
 const o = args();

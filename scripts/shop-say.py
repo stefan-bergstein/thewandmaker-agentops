@@ -6,12 +6,11 @@
   scripts/shop-say.py --decline            # Mr Ollivander declines the newest pending request
   scripts/shop-say.py --reset              # new day on the desk
 
-The shop address and the desk key come from the cluster (oc, local/kubeconfig); the key is never printed.
+The shop address and the desk key come from the cluster (the current oc context); the key is never printed.
 """
 from _oc import oc_out
 import json, os, subprocess, sys, urllib.request
-# Always this project's cluster, also when called without make (the Makefile sets the same).
-os.environ["KUBECONFIG"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "local", "kubeconfig")
+# Honor the caller's current oc context, including an exported KUBECONFIG.
 
 def oc(*a):
     return oc_out(a).strip()

@@ -22,7 +22,7 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENV = dict(os.environ, KUBECONFIG=os.path.join(ROOT, "local", "kubeconfig"))
+ENV = dict(os.environ)
 
 
 def oc(*a):

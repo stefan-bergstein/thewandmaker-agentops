@@ -34,7 +34,12 @@ nsflag() { [[ "$1" == "-" ]] && echo "" || echo "-n $1"; }
 
 csv_succeeded() {
   local ns=$1 sub=$2 csv
-  csv=$(oc get subscription.operators.coreos.com "$sub" -n "$ns" -o jsonpath='{.status.installedCSV}' 2>/dev/null)
+  # Existing clusters can use a different Subscription name for the same package.
+  csv=$(oc get subscriptions.operators.coreos.com -n "$ns" -o json --request-timeout=25s |
+    python3 -c 'import json,sys
+items = [s for s in json.load(sys.stdin)["items"]
+         if s["metadata"]["name"] == sys.argv[1] or s.get("spec", {}).get("name") == sys.argv[1]]
+print(items[0].get("status", {}).get("installedCSV", "") if len(items) == 1 else "")' "$sub")
   [[ -n "$csv" ]] || return 1
   [[ "$(oc get csv "$csv" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null)" == Succeeded ]]
 }

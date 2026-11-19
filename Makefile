@@ -1,13 +1,19 @@
 # Build up and tear down the demo platform. Everything reads credentials from the local .env.
 TF = python3 scripts/tf.py
+.DEFAULT_GOAL := preflight
 
 .PHONY: up-access login link-account status up-bootstrap up-network up-cluster up down-cluster down-network down \
         openshell-cli up-agent-sandbox up-openshell down-openshell bastion-cli up-maas \
         up-openclaw-image claw-test deck-live deck-mock deck-zip up-operators up-openshift-ai up-shop up-apprentice up-platform \
         up-mlflow up-traces night up-guardrails campaign cluster-login up-pool dashboard dashboard-stop film up-facts captures up-fd-limit up-tune up-persona up-model-name oracle shell-ui links prepare up-deck
 
-.PHONY: preflight vendor
-preflight:        ## Read-only check of everything the build needs: CLIs, .env names, cluster, operators, bastion
+.NOTPARALLEL: up-platform
+
+.PHONY: preflight vendor cli-connect test rosa-cluster-login
+test:             ## Offline regression checks (no cluster or credentials)
+	python3 -m unittest discover -s tests -v
+
+preflight:        ## Read-only check of everything the build needs: CLIs, .env names, cluster, operators, optional bastion
 	@python3 scripts/preflight.py
 
 AGENT_OPS_COMMIT = 7230605c8c0a4cec41c3e39e52e521db5c941355
@@ -23,9 +29,10 @@ link-account:     ## Once per new AWS account: let Red Hat's cluster service wor
 	rosa create ocm-role --mode auto --yes
 	rosa create user-role --mode auto --yes
 
-status:           ## What exists right now
-	python3 scripts/withenv.py aws sts get-caller-identity --query Account --output text
-	-rosa list clusters
+status:           ## Current OpenShift cluster
+	oc whoami
+	oc get clusterversion
+	oc get nodes
 
 up-bootstrap:     ## State bucket (keep it between rebuilds)
 	$(TF) bootstrap init -input=false
@@ -49,14 +56,18 @@ down-network:     ## Remove VPC and NAT gateway
 
 down: down-cluster down-network   ## Everything except the state bucket
 
-# ---- Platform on the cluster (KUBECONFIG=local/kubeconfig) ----
+# ---- Platform on an existing OpenShift cluster (current oc context) ----
 up-access:        ## Fresh cluster: cluster-admin (password only in local/ and ~/.olli on the bastion), logins, machine pool olli
 	python3 scripts/cluster-access.py
 
-cluster-login:    ## Log in again (tokens last 24 h): refreshes local/kubeconfig with the stored admin password
+cluster-login:    ## Interactive oc login using the current kubeconfig
 	python3 scripts/cluster-login.py
 
-export KUBECONFIG := $(CURDIR)/local/kubeconfig
+# Honor KUBECONFIG, otherwise use the current oc context (~/.kube/config).
+export PATH := $(HOME)/.local/bin:$(PATH)
+
+rosa-cluster-login: ## Optional legacy ROSA login into local/kubeconfig
+	python3 scripts/rosa-cluster-login.py
 
 openshell-cli: vendor ## Local OpenShell CLI 0.0.116 (pinned installer, checksum verified)
 	bash vendor/agent-ops/scripts/install-openshell-cli.sh
@@ -68,15 +79,18 @@ up-agent-sandbox: ## Red Hat build of Agent Sandbox 0.9
 	$(WAIT) csv openshift-operators agent-sandbox-operator
 	$(WAIT) crd sandboxes.agents.x-k8s.io
 
-up-openshell:     ## OpenShell gateway, narrow SCC, route, local CLI connection
+up-openshell:     ## OpenShell gateway, narrow SCC and route (then make cli-connect)
 	bash gitops/02-openshell/install.sh
 
-bastion-cli:      ## OpenShell CLI on the bastion, connected to the gateway
-	python3 scripts/on-bastion.py gitops/02-openshell/install-cli-linux.sh
-	python3 scripts/on-bastion.py gitops/02-openshell/connect-cli.sh
+cli-connect:      ## Connect the installed OpenShell CLI (local by default)
+	python3 scripts/run-openshell.py gitops/02-openshell/connect-cli.sh
+
+bastion-cli:      ## Optional legacy bastion: install and connect OpenShell
+	python3 scripts/run-openshell.py gitops/02-openshell/install-cli-linux.sh
+	python3 scripts/run-openshell.py gitops/02-openshell/connect-cli.sh
 
 up-maas:          ## Red Hat MaaS model behind inference.local (key stays in the gateway)
-	python3 scripts/on-bastion.py gitops/02-openshell/provider-maas.sh
+	python3 scripts/run-openshell.py gitops/02-openshell/provider-maas.sh
 
 up-openclaw-image: ## Build the OpenClaw sandbox image on the cluster
 	oc apply -f gitops/03-openclaw-image/build.yaml
@@ -84,7 +98,7 @@ up-openclaw-image: ## Build the OpenClaw sandbox image on the cluster
 	oc start-build openclaw-sandbox -n olli-build --follow
 
 up-operators:     ## OpenShift AI 3.5, cert-manager, LeaderWorkerSet, MCP gateway
-	oc apply -f gitops/10-operators/subscriptions.yaml
+	python3 scripts/install-platform-resources.py operators
 	$(WAIT) csv redhat-ods-operator rhods-operator 1200
 	$(WAIT) csv cert-manager-operator openshift-cert-manager-operator
 	$(WAIT) csv openshift-lws-operator leader-worker-set
@@ -93,8 +107,7 @@ up-operators:     ## OpenShift AI 3.5, cert-manager, LeaderWorkerSet, MCP gatewa
 
 up-openshift-ai:  ## DataScienceCluster with the components the talk uses
 	$(WAIT) crd datascienceclusters.datasciencecluster.opendatahub.io
-	oc apply -f gitops/11-openshift-ai/datasciencecluster.yaml
-	$(WAIT) condition - datasciencecluster/default-dsc Ready 1800
+	python3 scripts/install-platform-resources.py openshift-ai
 	$(WAIT) crd mlflows.mlflow.opendatahub.io nemoguardrails.trustyai.opendatahub.io
 	$(WAIT) exists - gatewayclass/data-science-gateway-class
 
@@ -110,7 +123,6 @@ up-guardrails:    ## Chapter 3: NeMo Guardrails (OpenShift AI) with rails releas
 	bash gitops/23-guardrails/install.sh
 
 up-shop:          ## Shop image, shop-tools, tool gateway, model gateway, shop-front
-	bash gitops/20-shop/facts.sh
 	bash gitops/20-shop/install.sh
 
 up-deck:          ## The deck served from the cluster over HTTPS (scripted for everyone, live with the password on slide 1)
@@ -123,7 +135,7 @@ captures:         ## Real product pages for the deck: a trace in MLflow, the rai
 	python3 scripts/captures.py
 
 up-apprentice:    ## (Re)create the apprentice sandbox with policy, config and role
-	python3 scripts/on-bastion.py gitops/04-openclaw/apprentice.sh gitops/04-openclaw/policy.yaml \
+	python3 scripts/run-openshell.py gitops/04-openclaw/apprentice.sh gitops/04-openclaw/policy.yaml \
 	  gitops/04-openclaw/openclaw.json gitops/04-openclaw/AGENTS.md gitops/04-openclaw/SOUL.md \
 	  gitops/04-openclaw/IDENTITY.md gitops/04-openclaw/USER.md
 	bash gitops/04-openclaw/fd-limit.sh
@@ -132,19 +144,19 @@ up-fd-limit:      ## Room for more open files in every apprentice's OpenShell su
 	bash gitops/04-openclaw/fd-limit.sh
 
 up-tune:          ## Running apprentices take over changed OpenClaw settings, without being recreated (keeps the audit log)
-	python3 scripts/on-bastion.py gitops/04-openclaw/tune.sh
+	python3 scripts/run-openshell.py gitops/04-openclaw/tune.sh
 
 up-persona:       ## Running apprentices take over the persona files (AGENTS, SOUL, IDENTITY, USER), without being recreated
-	python3 scripts/on-bastion.py gitops/04-openclaw/persona.sh gitops/04-openclaw/AGENTS.md gitops/04-openclaw/SOUL.md \
+	python3 scripts/run-openshell.py gitops/04-openclaw/persona.sh gitops/04-openclaw/AGENTS.md gitops/04-openclaw/SOUL.md \
 	  gitops/04-openclaw/IDENTITY.md gitops/04-openclaw/USER.md
 
 up-model-name:    ## Running apprentices ask for the model as "oracle" (what MLflow and the console then show), without being recreated
-	python3 scripts/on-bastion.py gitops/04-openclaw/model-name.sh
+	python3 scripts/run-openshell.py gitops/04-openclaw/model-name.sh
 
 up-pool:          ## Chapter 4: two more apprentices for the phones (apprentice-2, apprentice-3)
 	for n in 2 3; do APPRENTICE_NAME=apprentice-$$n $(MAKE) up-apprentice; done
 
-up-platform: up-access up-agent-sandbox up-openshell bastion-cli up-openclaw-image up-operators up-openshift-ai up-mlflow up-shop up-traces up-guardrails up-maas up-apprentice up-pool up-deck
+up-platform: up-agent-sandbox up-openshell cli-connect up-openclaw-image up-operators up-openshift-ai up-mlflow up-shop up-traces up-guardrails up-maas up-apprentice up-pool up-deck
 
 night:            ## The blond boy's night: 40 tricks against the real apprentice (run the evening before)
 	python3 scripts/night.py
@@ -164,26 +176,26 @@ deck-zip:         ## Zip the deck for sharing, always without the local live con
 film:             ## Cut the intro film from the shots, the text and the sounds, and put it into the deck
 	python3 film/cut.py --install
 
-dashboard:        ## The apprentice's own console (OpenClaw Control UI) in your browser, via OpenShell forward + ssh tunnel
+dashboard:        ## The apprentice's own console (OpenClaw Control UI) in your browser, via OpenShell forward
 	python3 scripts/dashboard.py $(or $(SANDBOX),apprentice)
 
-dashboard-stop:   ## Close that console: forward on the bastion, tunnel on this laptop
+dashboard-stop:   ## Close that console: OpenShell forward (and optional SSH tunnel)
 	python3 scripts/dashboard.py --stop
 
-shell-ui:         ## OpenShell's own interface (openshell term, a terminal UI) in a Terminal window, for slide 10
+shell-ui:         ## OpenShell terminal UI in the current interactive terminal
 	python3 scripts/shell-ui.py
 
 prepare:          ## Everything reset and prepared for a run of the talk, about 12 minutes (QUICK=1 without the night run, CAMPAIGN=1 runs the campaigns again, CHECK=1 only looks)
 	@python3 scripts/prepare.py $(if $(QUICK),--quick) $(if $(CAMPAIGN),--campaign) $(if $(CHECK),--check)
 
-links:            ## Every address of the demo on one page (SECRETS=1: with the desk key and the cluster-admin password)
+links:            ## Every address of the demo on one page (SECRETS=1: with the desk key)
 	@python3 scripts/links.py $(if $(SECRETS),--secrets) $(if $(OUT),--out $(OUT))
 
 oracle:           ## The three oracles: who answers first, calls, tokens, dollars (scripts/oracle.py mode|mark|since)
 	python3 scripts/oracle.py
 
 claw-test:        ## One OpenClaw turn in a throwaway sandbox, plus a blocked internet call
-	python3 scripts/on-bastion.py gitops/04-openclaw/smoke-test.sh gitops/04-openclaw/openclaw.json
+	python3 scripts/run-openshell.py gitops/04-openclaw/smoke-test.sh gitops/04-openclaw/openclaw.json
 
 down-openshell:   ## Remove OpenShell and its namespace
 	-helm uninstall openshell -n openshell

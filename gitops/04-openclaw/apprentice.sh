@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# On the bastion: (re)create the long-running "apprentice" sandbox with the shop policy, the
+# With a connected OpenShell CLI: (re)create the long-running "apprentice" sandbox with the shop policy, the
 # OpenClaw config (model via inference.local, tools via the tool gateway, spans to the collector)
 # and its role, then start OpenClaw's gateway inside it.
 #
@@ -20,22 +20,27 @@
 #
 #   APPRENTICE_NAME=apprentice-2 bash apprentice.sh     # a second one for the rush
 set -euo pipefail
+TIMEOUT=timeout
+if ! command -v timeout >/dev/null; then
+  command -v gtimeout >/dev/null || { echo "Install coreutils (timeout or gtimeout required)." >&2; exit 1; }
+  TIMEOUT=gtimeout
+fi
 cd "$(dirname "$0")"
 NAME=${APPRENTICE_NAME:-apprentice}
 IMG=$(oc get istag openclaw-sandbox:2026.9.5 -n olli-build -o jsonpath='{.image.dockerImageReference}')
 
 openshell sandbox delete "$NAME" >/dev/null 2>&1 && sleep 5 || true
-timeout 300 openshell sandbox create --name "$NAME" --from "$IMG" --policy policy.yaml </dev/null >/dev/null
+"$TIMEOUT" 300 openshell sandbox create --name "$NAME" --from "$IMG" --policy policy.yaml </dev/null >/dev/null
 
 # A fresh gateway token per sandbox. It only guards the loopback port inside the sandbox.
 # The sandbox name goes on the Control UI's top stripe (make dashboard), so you see which one it is.
 TOKEN=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
-CFG=$(sed -e "s/__GATEWAY_TOKEN__/$TOKEN/" -e "s/__APPRENTICE__/$NAME/" openclaw.json | base64 -w0)
+CFG=$(sed -e "s/__GATEWAY_TOKEN__/$TOKEN/" -e "s/__APPRENTICE__/$NAME/" openclaw.json | openssl base64 -A)
 WS=""
 for f in AGENTS.md SOUL.md IDENTITY.md USER.md; do
-  WS="$WS echo $(base64 -w0 "$f") | base64 -d > ~/.openclaw/workspace/$f;"
+  WS="$WS echo $(openssl base64 -A -in "$f") | base64 -d > ~/.openclaw/workspace/$f;"
 done
-START=$(base64 -w0 <<'SH'
+START=$(openssl base64 -A <<'SH'
 #!/bin/sh
 # Start the OpenClaw gateway once; a second call while it runs does nothing.
 curl -s -o /dev/null --max-time 2 http://127.0.0.1:18789/ && exit 0

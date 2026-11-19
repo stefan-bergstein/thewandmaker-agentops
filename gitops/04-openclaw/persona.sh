@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# On the bastion: give running apprentices the persona files from this folder (AGENTS.md, SOUL.md,
+# With a connected OpenShell CLI: give running apprentices the persona files from this folder (AGENTS.md, SOUL.md,
 # IDENTITY.md, USER.md) without recreating them. Recreating a sandbox empties its audit log; this
 # only rewrites four files in the workspace. OpenClaw reads them when a conversation starts, so
 # new conversations have the new persona and nothing is restarted.
@@ -14,7 +14,7 @@ cd "$(dirname "$0")"
 WS=""
 for f in AGENTS.md SOUL.md IDENTITY.md USER.md; do
   WS="$WS [ -f ~/.openclaw/workspace/$f.before ] || cp ~/.openclaw/workspace/$f ~/.openclaw/workspace/$f.before 2>/dev/null || true;"
-  WS="$WS echo $(base64 -w0 "$f") | base64 -d > ~/.openclaw/workspace/$f;"
+  WS="$WS echo $(openssl base64 -A -in "$f") | base64 -d > ~/.openclaw/workspace/$f;"
 done
 ONLY=${APPRENTICE_NAME:-}
 for NAME in $(openshell sandbox list | awk '$1 ~ /^apprentice(-[0-9]+)?$/ {print $1}'); do
